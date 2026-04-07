@@ -3,6 +3,7 @@ from fastapi import FastAPI, Request, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import RedirectResponse
+from schemas import UserCreate, UserEnum
 import bleach
 
 comments = []
@@ -18,16 +19,16 @@ async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
     policy = (
         "default-src 'self'; "
-        "script-src 'self' https://cdn.jsdelivr.net; "
-        "style-src 'self' https://cdn.jsdelivr.net; "
-        "img-src 'self' data:;"
+        "script-src 'self' https://cdn.jsdelivr.net 'sha256-QOOQu4W1oxGqd2nbXbxiA1Di6OHQOLQD+o+G9oWL8YY='; "
+        "style-src 'self' https://cdn.jsdelivr.net https://fastapi.tiangolo.com; "
+        "img-src 'self' data: https://fastapi.tiangolo.com;"
     )
 
     response.headers["Content-Security-Policy"] = policy
     return response
 @app.get("/comments")
 def read_comments(request: Request):
-    # ОПАСНО: передаем данные в шаблон
+    global comments
     return templates.TemplateResponse("comments.html", {"request": request, "comments": comments})
 
 @app.post("/comments")
@@ -35,3 +36,7 @@ def make_comment(comment: Annotated[str, Form()]):
     global comments
     comments.append(clean_text(comment))
     return RedirectResponse(app.url_path_for('read_comments'), status_code=303)
+
+@app.post("/register")
+def index(user: UserCreate) -> dict[str, Any]:
+    return {"message": "user created", "user": user.username}
