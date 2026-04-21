@@ -1,11 +1,14 @@
 import os
+import uuid
+import shutil
+import filetype
 from typing import Any, Annotated
 from dotenv import load_dotenv  # type: ignore
-from fastapi import Depends, FastAPI, Request, Form
+from fastapi import Depends, FastAPI, Request, Form, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.exceptions import HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, FileResponse
 from schemas import UserCreate, UserEnum
 from starlette import status
 from starlette.middleware.sessions import SessionMiddleware
@@ -30,11 +33,7 @@ users_db = [
     {"name": "bob", "age": 24, "role": UserEnum.user, "password": "P@ssW0rdButC00l3r"},
     {"name": "admin", "age": 37, "role": UserEnum.admin, "password": "Adm!n123"},
 ]
-file_db = [
-    {"id": 1, "filename": "report_alice.pdf", "owner": "alice", "size": 1024},
-    {"id": 2, "filename": "photo_bob.jpg", "owner": "bob", "size": 2048},
-    {"id": 3, "filename": "admin_keys.txt", "owner": "admin", "size": 12},
-]
+file_db = []
 
 def clean_text(text):
     return bleach.clean(text, tags=['b', 'i', 'u', 'em', 'strong'], attributes={}, strip=True)
@@ -156,3 +155,50 @@ def show_users(user: Annotated[dict | None, Depends(current_user)]) -> list:
 def index(user: UserCreate) -> dict[str, Any]:
     users_db.append({"name": user.username, "age": user.age, "role": user.role, "password": user.password})
     return {"message": "user created", "user": user.username}
+
+def check_file_type(file: UploadFile, types: list[str]) -> bool:
+    head = file.file.read(2048)
+    kind = filetype.guess(head)
+
+    if kind is None or kind.mime not in types:
+        return False
+    file.file.seek(0)
+    return True
+
+@app.post("/upload")
+def upload_file(request: Request, file: UploadFile) -> dict[str, Any]:
+    user = current_user(request)
+    if not check_file_type(file, ["image/png", "image/jpeg"]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is not a valid image",
+        )
+    name = uuid.uuid4()
+    limit = 1024*1024*2
+    chunk_size = 1024
+    cur_size = 0
+    flag = False
+    with open(f"storage/{name}", "wb") as f:
+        while True:
+            chunk = file.file.read(chunk_size)
+            if not chunk:
+                break
+            cur_size+=len(chunk)
+            if cur_size>limit:
+                flag = True
+                break
+            f.write(chunk)
+    if flag:
+        os.remove(f"storage/{name}")
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="Uploaded file is longer than the 2 MB limit"
+        )
+    file_db.append(
+        {"id": len(file_db) + 1, "owner": user["name"], "name": name, "src_name": file.filename, "size": cur_size}
+    )
+    return {"message": "File created"}
+
+@app.get("/files/download/{file_ind}")
+def download_file(file: Annotated[dict | None, Depends(check_file_permissions)]):
+    return FileResponse(f"storage/{file["name"]}", filename=file["src_name"])
