@@ -35,3 +35,4 @@ uvicorn==0.42.0
 virtualenv==21.2.0
 webencodings==0.5.1
 filetype==1.0.7
+cryptography==47.0.0

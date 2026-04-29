@@ -1,6 +1,8 @@
 import os
 import uuid
 import shutil
+from urllib.parse import quote
+from io import BytesIO
 import filetype
 from typing import Any, Annotated
 from dotenv import load_dotenv  # type: ignore
@@ -8,16 +10,20 @@ from fastapi import Depends, FastAPI, Request, Form, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.exceptions import HTTPException
-from fastapi.responses import RedirectResponse, FileResponse
+from fastapi.responses import RedirectResponse, FileResponse, StreamingResponse
 from schemas import UserCreate, UserEnum
 from starlette import status
 from starlette.middleware.sessions import SessionMiddleware
+from cryptography.fernet import Fernet
 import bleach
 
 load_dotenv()
 
 if os.getenv("APP_SECRET") is None:
     raise ValueError("APP_SECRET environment variable is not set")
+fernet_key = os.getenv("ENCRYPTION_KEY").encode()
+if fernet_key is None:
+    raise ValueError("ENCRYPTION_KEY environment variable is not set")
 
 comments = []
 app = FastAPI()
@@ -156,49 +162,64 @@ def index(user: UserCreate) -> dict[str, Any]:
     users_db.append({"name": user.username, "age": user.age, "role": user.role, "password": user.password})
     return {"message": "user created", "user": user.username}
 
-def check_file_type(file: UploadFile, types: list[str]) -> bool:
-    head = file.file.read(2048)
+def check_file_type(file: UploadFile, types: list[str]) -> str:
+    head = file.file.read(128)
     kind = filetype.guess(head)
 
-    if kind is None or kind.mime not in types:
-        return False
-    file.file.seek(0)
-    return True
+    if kind is None:
+        if file.filename.endswith(".txt"):
+            mime = "text/plain"
+    else:
+        mime = kind.mime
 
-@app.post("/upload")
-def upload_file(request: Request, file: UploadFile) -> dict[str, Any]:
-    user = current_user(request)
-    if not check_file_type(file, ["image/png", "image/jpeg"]):
+    if mime is None or mime not in types:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is not a valid image",
+            detail=f"File type couldn't be found in {types}",
         )
-    name = uuid.uuid4()
+    file.file.seek(0)
+    return mime
+
+def check_file_size(file: UploadFile) -> None:
     limit = 1024*1024*2
-    chunk_size = 1024
-    cur_size = 0
-    flag = False
-    with open(f"storage/{name}", "wb") as f:
-        while True:
-            chunk = file.file.read(chunk_size)
-            if not chunk:
-                break
-            cur_size+=len(chunk)
-            if cur_size>limit:
-                flag = True
-                break
-            f.write(chunk)
-    if flag:
-        os.remove(f"storage/{name}")
+    size = file.size or 0
+    if size>limit:
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail="Uploaded file is longer than the 2 MB limit"
         )
+
+@app.post("/upload")
+def upload_file(
+        file: UploadFile,
+        user: Annotated[dict | None, Depends(current_user)],
+        secret: bool = False
+    ) -> dict[str, Any]:
+    check_file_size(file)
+    type = check_file_type(file, ["image/png", "image/jpeg", "text/plain"])
+    name = uuid.uuid4()
+    with open(f"storage/{name}", "wb") as f:
+        data = file.file.read()
+        if secret:
+            data = Fernet(fernet_key).encrypt(data)
+        f.write(data)
     file_db.append(
-        {"id": len(file_db) + 1, "owner": user["name"], "name": name, "src_name": file.filename, "size": cur_size}
+        {"id": len(file_db) + 1, "owner": user["name"], "name": name, "src_name": file.filename, "type": type, "secret": secret}
     )
     return {"message": "File created"}
 
 @app.get("/files/download/{file_ind}")
 def download_file(file: Annotated[dict | None, Depends(check_file_permissions)]):
-    return FileResponse(f"storage/{file["name"]}", filename=file["src_name"])
+    with open(f"storage/{file["name"]}", "rb") as f:
+        if file["secret"]:
+            data = Fernet(fernet_key).decrypt(f.read())
+        else:
+            data = f.read()
+    return StreamingResponse(
+            content=BytesIO(data),
+            status_code=status.HTTP_200_OK,
+            headers={
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{quote(str(file['src_name']))}"
+                },
+                media_type=str(file["type"]),
+        )
