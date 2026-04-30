@@ -27,7 +27,7 @@ if fernet_key is None:
 
 comments = []
 app = FastAPI()
-templates = Jinja2Templates(directory="../templates")
+templates = Jinja2Templates(directory="./templates")
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.getenv("APP_SECRET"),  # type: ignore
@@ -210,7 +210,8 @@ def upload_file(
 
 @app.get("/files/download/{file_ind}")
 def download_file(file: Annotated[dict | None, Depends(check_file_permissions)]):
-    with open(f"storage/{file["name"]}", "rb") as f:
+    filename = file["name"]
+    with open(f"storage/{filename}", "rb") as f:
         if file["secret"]:
             data = Fernet(fernet_key).decrypt(f.read())
         else:
