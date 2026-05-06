@@ -224,3 +224,21 @@ def download_file(file: Annotated[dict | None, Depends(check_file_permissions)])
                 },
                 media_type=str(file["type"]),
         )
+
+@app.post("/evil_unsafe_upload")
+def upload_file(
+        file: UploadFile,
+        secret: bool = False
+    ) -> dict[str, Any]:
+    check_file_size(file)
+    type = check_file_type(file, ["image/png", "image/jpeg", "text/plain"])
+    name = uuid.uuid4()
+    with open(f"storage/{name}", "wb") as f:
+        data = file.file.read()
+        if secret:
+            data = Fernet(fernet_key).encrypt(data)
+        f.write(data)
+    file_db.append(
+        {"id": len(file_db) + 1, "owner": "UNOWEN", "name": name, "src_name": file.filename, "type": type, "secret": secret}
+    )
+    return {"message": "File created"}
