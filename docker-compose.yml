@@ -7,5 +7,6 @@ services:
       - "8000:8000"
     volumes:
       - ./storage:/app/storage
+      - ./logs:/app/logs
     env_file:
       - .env
