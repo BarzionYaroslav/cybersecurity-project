@@ -10,12 +10,13 @@ from fastapi import Depends, FastAPI, Request, Form, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.exceptions import HTTPException
-from fastapi.responses import RedirectResponse, FileResponse, StreamingResponse
+from fastapi.responses import RedirectResponse, FileResponse, StreamingResponse, JSONResponse
 from schemas import UserCreate, UserEnum
 from starlette import status
 from starlette.middleware.sessions import SessionMiddleware
 from cryptography.fernet import Fernet
 import bleach
+from logger_config import logger
 
 load_dotenv()
 
@@ -56,6 +57,24 @@ async def add_security_headers(request: Request, call_next):
 
     response.headers["Content-Security-Policy"] = policy
     return response
+
+@app.middleware("http")
+async def add_logger(request: Request, call_next):
+    logger.info(f"Incoming request: {request.method} {request.url} {request.client.host}")
+    response = await call_next(request)
+    logger.info(f"Response status: {response.status_code}")
+    return response
+
+@app.middleware("http")
+async def exception_handler(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        logger.error(f"An error has occured! {exc}", exc_info=True)
+        return JSONResponse(
+            content={"detail": "We are sorry, something went wrong."},
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 @app.get("/comments")
 def read_comments(request: Request):
@@ -102,6 +121,7 @@ def current_user(request: Request) -> dict | None:
         None,
     )
     if user is None:
+        logger.warning(f"Anonymous Unathorized User attempting to access {request.url} {request.method}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized"
         )
@@ -111,12 +131,13 @@ def get_file(file_ind: int) -> dict | None:
     file = next((f for f in file_db if f["id"] == file_ind), None)
     return file
 
-def check_file_permissions(user: Annotated[dict | None, Depends(current_user)], file: Annotated[dict | None, Depends(get_file)]) -> dict:
+def check_file_permissions(request: Request, user: Annotated[dict | None, Depends(current_user)], file: Annotated[dict | None, Depends(get_file)]) -> dict:
     if file is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="File not found"
         )
     if file["owner"] != user["name"] and user["role"]!=UserEnum.admin:
+        logger.warning(f"{user["name"]} trying to access {file["owner"]}'s file (id {file["id"]}) at {request.url} {request.method}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="File not found"
         )
@@ -139,16 +160,18 @@ def get_file(user: Annotated[dict | None, Depends(current_user)]) -> dict | list
     return files
 
 @app.get("/allfiles")
-def get_file(user: Annotated[dict | None, Depends(current_user)]) -> list:
+def get_file(request: Request, user: Annotated[dict | None, Depends(current_user)]) -> list:
     if user["role"] != UserEnum.admin:
+        logger.warning(f"{user["name"]} trying to access admin-only area at {request.url} (user role: {user["role"]})")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized"
         )
     return file_db
 
 @app.get("/users")
-def show_users(user: Annotated[dict | None, Depends(current_user)]) -> list:
+def show_users(request: Request, user: Annotated[dict | None, Depends(current_user)]) -> list:
     if user["role"] != UserEnum.admin:
+        logger.warning(f"{user["name"]} trying to access admin-only area at {request.url} (user role: {user["role"]})")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized"
         )
@@ -242,3 +265,7 @@ def upload_file(
         {"id": len(file_db) + 1, "owner": "UNOWEN", "name": name, "src_name": file.filename, "type": type, "secret": secret}
     )
     return {"message": "File created"}
+
+@app.get("/cause_error")
+def divide_by_zero() -> dict[str, Any]:
+    return {"message": f"{1/0}"}
