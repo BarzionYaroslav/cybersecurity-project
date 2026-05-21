@@ -1,4 +1,5 @@
 import os
+import json
 import uuid
 import shutil
 from urllib.parse import quote
@@ -20,6 +21,9 @@ from logger_config import logger
 
 load_dotenv()
 
+USER_JSON_PATH = "./storage/users.json"
+FILE_JSON_PATH = "./storage/files.json"
+
 if os.getenv("APP_SECRET") is None:
     raise ValueError("APP_SECRET environment variable is not set")
 fernet_key = os.getenv("ENCRYPTION_KEY").encode()
@@ -35,12 +39,28 @@ app.add_middleware(
     https_only=True,
 )
 
-users_db = [
-    {"name": "alice", "age": 20, "role": UserEnum.user, "password": "P@ssW0rd"},
-    {"name": "bob", "age": 24, "role": UserEnum.user, "password": "P@ssW0rdButC00l3r"},
-    {"name": "admin", "age": 37, "role": UserEnum.admin, "password": "Adm!n123"},
-]
-file_db = []
+if not os.path.exists(USER_JSON_PATH):
+    user_file = open(USER_JSON_PATH, "w")
+    user_file.write(json.dumps([]))
+    users_db = []
+    user_file.close()
+else:
+    with open(USER_JSON_PATH, "r") as user_file:
+        try:
+            users_db = json.loads(user_file.read())
+        except:
+            users_db = []
+if not os.path.exists(FILE_JSON_PATH):
+    file_file = open(FILE_JSON_PATH, "w")
+    file_file.write(json.dumps([]))
+    file_db = []
+    file_file.close()
+else:
+    with open(FILE_JSON_PATH, "r") as file_file:
+        try:
+            file_db = json.loads(file_file.read())
+        except:
+            file_db = []
 
 def clean_text(text):
     return bleach.clean(text, tags=['b', 'i', 'u', 'em', 'strong'], attributes={}, strip=True)
@@ -150,6 +170,8 @@ def get_file(file: Annotated[dict | None, Depends(check_file_permissions)]) -> d
 @app.delete("/files/{file_ind}")
 def remove_file(file: Annotated[dict | None, Depends(check_file_permissions)]) -> dict:
     file_db.remove(file)
+    with open(FILE_JSON_PATH, "w") as file_json:
+        file_json.write(json.dumps(file_db))
     return {"message": "Removed file"}
 
 @app.get("/myfiles")
@@ -183,6 +205,8 @@ def show_users(request: Request, user: Annotated[dict | None, Depends(current_us
 @app.post("/register")
 def index(user: UserCreate) -> dict[str, Any]:
     users_db.append({"name": user.username, "age": user.age, "role": user.role, "password": user.password})
+    with open(USER_JSON_PATH, "w") as user_file:
+        user_file.write(json.dumps(users_db))
     return {"message": "user created", "user": user.username}
 
 def check_file_type(file: UploadFile, types: list[str]) -> str:
@@ -220,7 +244,7 @@ def upload_file(
     ) -> dict[str, Any]:
     check_file_size(file)
     type = check_file_type(file, ["image/png", "image/jpeg", "text/plain"])
-    name = uuid.uuid4()
+    name = str(uuid.uuid4())
     with open(f"storage/{name}", "wb") as f:
         data = file.file.read()
         if secret:
@@ -229,6 +253,8 @@ def upload_file(
     file_db.append(
         {"id": len(file_db) + 1, "owner": user["name"], "name": name, "src_name": file.filename, "type": type, "secret": secret}
     )
+    with open(FILE_JSON_PATH, "w") as file_json:
+        file_json.write(json.dumps(file_db))
     return {"message": "File created"}
 
 @app.get("/files/download/{file_ind}")
@@ -255,7 +281,7 @@ def upload_file(
     ) -> dict[str, Any]:
     check_file_size(file)
     type = check_file_type(file, ["image/png", "image/jpeg", "text/plain"])
-    name = uuid.uuid4()
+    name = str(uuid.uuid4())
     with open(f"storage/{name}", "wb") as f:
         data = file.file.read()
         if secret:
@@ -264,6 +290,8 @@ def upload_file(
     file_db.append(
         {"id": len(file_db) + 1, "owner": "UNOWEN", "name": name, "src_name": file.filename, "type": type, "secret": secret}
     )
+    with open(FILE_JSON_PATH, "w") as file_json:
+        file_json.write(json.dumps(file_db))
     return {"message": "File created"}
 
 @app.get("/cause_error")
