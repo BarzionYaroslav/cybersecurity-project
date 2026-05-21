@@ -1,0 +1,11 @@
+name: Security Check
+on: [push]
+jobs:
+  bandit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Run Bandit
+        uses: PyCQA/bandit-action@v1.2.0
+        with:
+          args: "-r ./src -ll"  # -ll: только Medium/High severity
