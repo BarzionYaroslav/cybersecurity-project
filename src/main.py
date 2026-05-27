@@ -17,6 +17,7 @@ from starlette import status
 from starlette.middleware.sessions import SessionMiddleware
 from cryptography.fernet import Fernet
 import bleach
+from passlib.hash import argon2
 from logger_config import logger
 
 load_dotenv()
@@ -108,8 +109,16 @@ def make_comment(comment: Annotated[str, Form()]):
     return RedirectResponse(app.url_path_for('read_comments'), status_code=303)
 
 @app.post("/set-session")
-def set_session(request: Request, name: str) -> dict:
-    if name not in [u["name"] for u in users_db]:
+def set_session(request: Request, name: str, password: str) -> dict:
+    user = next(
+        (
+            u
+            for u in users_db
+            if u["name"] == name and argon2.verify(password, u["password"])
+        ),
+        None,
+    )
+    if user == None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid login"
         )
@@ -204,7 +213,20 @@ def show_users(request: Request, user: Annotated[dict | None, Depends(current_us
 
 @app.post("/register")
 def index(user: UserCreate) -> dict[str, Any]:
-    users_db.append({"name": user.username, "age": user.age, "role": user.role, "password": user.password})
+    user_check = next(
+        (
+            u
+            for u in users_db
+            if u["name"] == user.username
+        ),
+        None,
+    )
+    if user_check != None:
+        logger.warning(f"Attempted to create a second user {user.username}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Username taken! Please try a different one!"
+        )
+    users_db.append({"name": user.username, "age": user.age, "role": user.role, "password": argon2.hash(user.password)})
     with open(USER_JSON_PATH, "w") as user_file:
         user_file.write(json.dumps(users_db))
     return {"message": "user created", "user": user.username}
@@ -273,26 +295,6 @@ def download_file(file: Annotated[dict | None, Depends(check_file_permissions)])
                 },
                 media_type=str(file["type"]),
         )
-
-@app.post("/evil_unsafe_upload")
-def upload_file(
-        file: UploadFile,
-        secret: bool = False
-    ) -> dict[str, Any]:
-    check_file_size(file)
-    type = check_file_type(file, ["image/png", "image/jpeg", "text/plain"])
-    name = str(uuid.uuid4())
-    with open(f"storage/{name}", "wb") as f:
-        data = file.file.read()
-        if secret:
-            data = Fernet(fernet_key).encrypt(data)
-        f.write(data)
-    file_db.append(
-        {"id": len(file_db) + 1, "owner": "UNOWEN", "name": name, "src_name": file.filename, "type": type, "secret": secret}
-    )
-    with open(FILE_JSON_PATH, "w") as file_json:
-        file_json.write(json.dumps(file_db))
-    return {"message": "File created"}
 
 @app.get("/cause_error")
 def divide_by_zero() -> dict[str, Any]:
